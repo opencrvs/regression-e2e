@@ -28,14 +28,16 @@ jobs:
   test:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
+    outputs:
+      failed-tests: ${{ steps.summary.outputs.text }}
     env:
       DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -49,12 +51,58 @@ jobs:
           GREP: ${{ inputs.grep }}
         run: pnpm exec playwright test ${GREP:+--grep "$GREP"}
 
+      - name: List the failed tests
+        id: summary
+        if: ${{ failure() }}
+        run: |
+          report=ctrf/ctrf-report.json
+          if [ ! -f "$report" ]; then
+            exit 0
+          fi
+          delimiter="EOF_$(openssl rand -hex 8)"
+          {
+            echo "text<<$delimiter"
+            jq -r '
+              "\(.results.summary.failed) of \(.results.summary.tests) tests failed:",
+              (.results.tests[] | select(.status == "failed") | "• \(.name)")
+            ' "$report"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Upload the report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: regression-report-${{ github.run_id }}
           path: |
             playwright-report/
             ctrf/
           retention-days: 30
+
+  notify:
+    name: Send a Slack message on failure
+    needs: test
+    # A cancelled run does not send a message.
+    if: ${{ failure() }}
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Make the message
+        env:
+          DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FAILED_TESTS: ${{ needs.test.outputs.failed-tests }}
+        run: |
+          jq -n \
+            --arg domain "$DOMAIN" \
+            --arg url "$RUN_URL" \
+            --arg failed "$FAILED_TESTS" \
+            '{
+              channel: "C02P91N0E1W",
+              text: ":x: The regression tests failed on \($domain). <\($url)|Open the run>\n\($failed)"
+            }' > payload.json
+
+      - uses: slackapi/slack-github-action@v4.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload-file-path: payload.json
