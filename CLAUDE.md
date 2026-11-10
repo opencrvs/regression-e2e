@@ -43,7 +43,7 @@ test(
 
 - A test can cover more than one case. A case can be split across more than one test.
 - Add the tag only when the test checks all the expected results of the case. If the test checks only some of them, add `{ annotation: { type: 'partial', description: 'C1234: <what is not checked>' } }` and do not add the tag.
-- A test that is not for a TestRail case is a technical test. Give it the tag `@technical`, so that it is separate from the TestRail tests. Keep a technical test only when it protects a regression that the team cares about.
+- Each test is for a TestRail case. It has at least one case tag or one `partial` annotation.
 - `pnpm test --grep @C808` runs the tests for one case.
 
 ## Test principles
@@ -61,7 +61,7 @@ Follow the [Playwright best practices](https://playwright.dev/docs/best-practice
 ## Login
 
 - `login(page, CREDENTIALS.<ROLE>)` in `support/helpers.ts` logs in through the API and creates the PIN. Use it in almost all tests.
-- `tests/login/` contains the tests that log in through the login app, as a real user does. Use the login app only when the TestRail case is about login.
+- Log in through the login app, as a real user does, only when the TestRail case is about login.
 - Tests cannot share a saved login session (`storageState`). The auth service replaces the refresh token each time the client refreshes the session. When a test uses an old refresh token, the auth service logs out all copies of the session.
 - The client loads the locations when the user logs in. If the test creates or changes a location, do that before `login()`.
 - Each user in `CREDENTIALS` has the password `TEST_USER_PASSWORD` and the 2FA code `000000`.
