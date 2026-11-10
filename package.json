@@ -1,0 +1,37 @@
+{
+  "name": "opencrvs-e2e-regression",
+  "private": true,
+  "description": "Automated regression tests for OpenCRVS, written from TestRail test cases",
+  "license": "MPL-2.0",
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "report": "playwright show-report",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@faker-js/faker": "^10.6.0",
+    "@opencrvs/toolkit": "2.2.0-rc.1a111f2",
+    "@playwright/test": "1.65.0",
+    "@types/lodash": "^4.17.27",
+    "@types/node": "^22.20.5",
+    "date-fns": "^2.30.0",
+    "eslint": "^10.14.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-playwright": "^2.12.2",
+    "lodash": "^4.18.1",
+    "playwright-ctrf-json-reporter": "^0.2.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.2",
+    "uuid": "^14.0.3"
+  }
+}

@@ -1,0 +1,60 @@
+name: Regression tests
+
+on:
+  schedule:
+    # Every night at 01:00 UTC, when nobody uses the environment.
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: The environment to test
+        type: choice
+        options:
+          - qa
+        default: qa
+      grep:
+        description: Run only the tests that match this pattern, for example @C808
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ inputs.environment || 'qa' }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    env:
+      DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run the tests against ${{ env.DOMAIN }}
+        env:
+          GREP: ${{ inputs.grep }}
+        run: pnpm exec playwright test ${GREP:+--grep "$GREP"}
+
+      - name: Upload the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: regression-report-${{ github.run_id }}
+          path: |
+            playwright-report/
+            ctrf/
+          retention-days: 30
