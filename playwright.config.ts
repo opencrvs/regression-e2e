@@ -18,7 +18,7 @@ export default defineConfig({
   /*
    * A retry hides a flaky test. We keep one retry on CI only so that we can
    * find the flaky tests. retry-reporter.ts records each test that needed a
-   * retry. The nightly run shows them in the run summary and in Slack. Fix
+   * retry. The weekly run shows them in the run summary and in Slack. Fix
    * each flaky test that it shows.
    */
   retries: process.env.CI ? 1 : 0,

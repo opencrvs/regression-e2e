@@ -2,8 +2,8 @@ name: Regression tests
 
 on:
   schedule:
-    # Every night at 01:00 UTC, when nobody uses the environment.
-    - cron: '0 1 * * *'
+    # Every Monday at 01:00 UTC, when nobody uses the environment.
+    - cron: '0 1 * * 1'
   workflow_dispatch:
     inputs:
       environment:
@@ -101,7 +101,7 @@ jobs:
       - name: Make the message
         env:
           RESULT: ${{ needs.test.result }}
-          TRIGGER: ${{ github.event_name == 'schedule' && 'nightly run' || format('run by {0}', github.actor) }}
+          TRIGGER: ${{ github.event_name == 'schedule' && 'weekly run' || format('run by {0}', github.actor) }}
           DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RESULTS: ${{ needs.test.outputs.results }}

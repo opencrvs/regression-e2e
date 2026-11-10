@@ -15,7 +15,7 @@ DOMAIN=example.opencrvs.dev pnpm test
 pnpm report                  # open the last HTML report
 ```
 
-GitHub Actions runs all the tests every night against `qa.opencrvs.dev`. You can also start a run from the **Actions** tab. The run uploads the HTML report and a CTRF JSON report.
+GitHub Actions runs all the tests every Monday at 01:00 UTC against `qa.opencrvs.dev`. You can also start a run from the **Actions** tab. The run uploads the HTML report and a CTRF JSON report.
 
 After each run, a Slack message goes to the QA channel. The message tells if the run passed or failed, lists the failed tests, and has a link to the run.
 
