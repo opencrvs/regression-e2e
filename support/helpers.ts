@@ -138,6 +138,7 @@ export async function getAuthTokens(
     })
   })
 
+  await expectOk(authResponse, `Authenticate ${username}`)
   const authBody = await authResponse.json()
   const verifyResponse = await fetch(verifyUrl, {
     method: 'POST',
@@ -150,11 +151,26 @@ export async function getAuthTokens(
     })
   })
 
+  await expectOk(verifyResponse, `Verify the 2FA code of ${username}`)
   const verifyBody = await verifyResponse.json()
 
   return {
     token: verifyBody.token as string,
     refreshToken: verifyBody.refreshToken as string
+  }
+}
+
+/**
+ * Throws an error with the status and the body of the response when the
+ * request failed. Without this, a failed login shows only as a missing token.
+ * For example, the gateway returns 429 when a user logs in more than 10 times
+ * in a minute.
+ */
+async function expectOk(response: Response, description: string) {
+  if (!response.ok) {
+    throw new Error(
+      `${description} failed with ${response.status}: ${await response.text()}`
+    )
   }
 }
 

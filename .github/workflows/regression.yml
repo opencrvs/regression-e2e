@@ -2,8 +2,8 @@ name: Regression tests
 
 on:
   schedule:
-    # Every night at 01:00 UTC, when nobody uses the environment.
-    - cron: '0 1 * * *'
+    # Every Monday at 01:00 UTC, when nobody uses the environment.
+    - cron: '0 1 * * 1'
   workflow_dispatch:
     inputs:
       environment:
@@ -28,33 +28,110 @@ jobs:
   test:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
+    outputs:
+      results: ${{ steps.summary.outputs.text }}
+      retries: ${{ steps.retries.outputs.slack }}
     env:
       DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.1.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm exec playwright install --with-deps chromium
+      # The tests use only headless Chromium. The runner image already has the
+      # system libraries that Chromium needs, so we do not use --with-deps. It
+      # installs many apt packages for WebKit and Firefox. Core does the same.
+      - run: pnpm exec playwright install --only-shell chromium
 
       - name: Run the tests against ${{ env.DOMAIN }}
         env:
           GREP: ${{ inputs.grep }}
         run: pnpm exec playwright test ${GREP:+--grep "$GREP"}
 
+      - name: List the failed tests
+        id: summary
+        if: ${{ !cancelled() }}
+        run: |
+          report=ctrf/ctrf-report.json
+          if [ ! -f "$report" ]; then
+            exit 0
+          fi
+          delimiter="EOF_$(openssl rand -hex 8)"
+          {
+            echo "text<<$delimiter"
+            jq -r '
+              .results as $r
+              | if $r.summary.failed > 0 then
+                  "\($r.summary.failed) of \($r.summary.tests) tests failed:",
+                  ($r.tests[] | select(.status == "failed") | "• \(.name)")
+                else
+                  "\($r.summary.passed) of \($r.summary.tests) tests passed."
+                end
+            ' "$report"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Summarise the retried tests
+        id: retries
+        if: ${{ !cancelled() }}
+        run: node reporting/summarise-retries.mjs retries/retries.json
+
       - name: Upload the report
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: regression-report-${{ github.run_id }}
           path: |
             playwright-report/
             ctrf/
+            retries/
           retention-days: 30
+
+  notify:
+    name: Send a Slack message
+    needs: test
+    # A cancelled run does not send a message.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Make the message
+        env:
+          RESULT: ${{ needs.test.result }}
+          TRIGGER: ${{ github.event_name == 'schedule' && 'weekly run' || format('run by {0}', github.actor) }}
+          DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS: ${{ needs.test.outputs.results }}
+          RETRIES: ${{ needs.test.outputs.retries }}
+        run: |
+          if [ "$RESULT" = success ]; then
+            headline=":white_check_mark: The regression tests passed on $DOMAIN ($TRIGGER)."
+          else
+            headline=":x: The regression tests failed on $DOMAIN ($TRIGGER)."
+          fi
+          jq -n \
+            --arg headline "$headline" \
+            --arg url "$RUN_URL" \
+            --arg results "$RESULTS" \
+            --arg retries "$RETRIES" \
+            '{
+              channel: "C02P91N0E1W",
+              text: ([
+                "\($headline) <\($url)|Open the run>",
+                $results,
+                $retries
+              ] | map(select(. != "")) | join("\n"))
+            }' > payload.json
+          cat payload.json
+
+      - uses: slackapi/slack-github-action@v4.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.SLACK_BOT_TOKEN }}
+          payload-file-path: payload.json
