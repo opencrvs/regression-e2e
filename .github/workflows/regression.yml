@@ -45,7 +45,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm exec playwright install --with-deps chromium
+      # The tests use only headless Chromium. The runner image already has the
+      # system libraries that Chromium needs, so we do not use --with-deps. It
+      # installs many apt packages for WebKit and Firefox. Core does the same.
+      - run: pnpm exec playwright install --only-shell chromium
 
       - name: Run the tests against ${{ env.DOMAIN }}
         env:
