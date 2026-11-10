@@ -64,7 +64,9 @@ function writeSummary() {
     return
   }
 
-  const escapeCell = (text) => escapeMarkup(text).replace(/\|/g, '\\|')
+  // Escape the backslashes first. Then a `\|` in the text cannot end a cell.
+  const escapeCell = (text) =>
+    escapeMarkup(text).replace(/\\/g, '\\\\').replace(/\|/g, '\\|')
 
   const rows = tests.map((test) =>
     [
