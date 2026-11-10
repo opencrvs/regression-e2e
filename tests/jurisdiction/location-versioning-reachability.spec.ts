@@ -164,199 +164,207 @@ test.describe('Jurisdiction & routing under location versioning', () => {
     openPages = []
   })
 
-  test('Rename does not affect record reachability', async ({ browser }) => {
-    const officeName = `E2E Rename Office ${uuidv4()}`
-    const office = await createOffice(
-      systemAdminToken,
-      ibomboAreaId,
-      officeName
-    )
+  test(
+    'Rename does not affect record reachability',
+    { tag: ['@technical'] },
+    async ({ browser }) => {
+      const officeName = `E2E Rename Office ${uuidv4()}`
+      const office = await createOffice(
+        systemAdminToken,
+        ibomboAreaId,
+        officeName
+      )
 
-    const { username } = await provisionUserInOffice(
-      systemAdminToken,
-      office.id,
-      'REGISTRATION_AGENT'
-    )
+      const { username } = await provisionUserInOffice(
+        systemAdminToken,
+        office.id,
+        'REGISTRATION_AGENT'
+      )
 
-    await activateUserViaApi(username)
-    const userToken = await getToken(username, NEW_USER_PASSWORD)
+      await activateUserViaApi(username)
+      const userToken = await getToken(username, NEW_USER_PASSWORD)
 
-    const { declaration, eventId } = await createDeclaration(
-      userToken,
-      undefined,
-      ActionType.DECLARE
-    )
-    const childName = formatV2ChildName(declaration as any)
-    expect(eventId).toBeTruthy()
-
-    await putLocationVersion(systemAdminToken, office.id, {
-      name: 'Renamed Office After Go-Live',
-      externalId: office.externalId,
-      status: 'active',
-      effectiveFrom: '2020-06-01',
-      lastVersionId: office.versions[0].versionId
-    })
-
-    // A different Ibombo registrar should still resolve the record post-rename.
-    const registrarPage = await newPage(browser)
-    await login(registrarPage, CREDENTIALS.REGISTRAR)
-    await assertRecordInWorkqueue({
-      page: registrarPage,
-      name: childName,
-      workqueues: [{ title: 'Pending registration', exists: true }]
-    })
-  })
-
-  test('Inactivating an office keeps its Notified/Declared records reachable and processable to the same administrative area', async ({
-    browser
-  }) => {
-    const officeName = `E2E Inactivate Office ${uuidv4()}`
-    const office = await createOffice(
-      systemAdminToken,
-      ibomboAreaId,
-      officeName
-    )
-
-    const { username } = await provisionUserInOffice(
-      systemAdminToken,
-      office.id,
-      'REGISTRATION_AGENT'
-    )
-
-    await activateUserViaApi(username)
-    const userToken = await getToken(username, NEW_USER_PASSWORD)
-
-    const { declaration, eventId } = await createDeclaration(
-      userToken,
-      undefined,
-      ActionType.DECLARE
-    )
-    const childName = formatV2ChildName(declaration as any)
-    expect(eventId).toBeTruthy()
-
-    // Log in before inactivating — fresh logins for an inactive office are
-    // blocked. Waiting for "Recent" also confirms the client's office-status
-    // check cached "active" before inactivation, avoiding a race.
-    const ownUserPage = await newPage(browser)
-    await loginAsProvisionedUser(ownUserPage, username)
-    await expect(
-      ownUserPage.getByRole('button', { name: 'Recent' })
-    ).toBeVisible({ timeout: 30_000 })
-
-    await putLocationVersion(systemAdminToken, office.id, {
-      name: office.name,
-      externalId: office.externalId,
-      status: 'inactive',
-      effectiveFrom: '2020-06-01',
-      lastVersionId: office.versions[0].versionId
-    })
-
-    // Their session should still see the record. A Registration Officer's
-    // own DECLARE auto-validates, so it moves to the registrar's queue and
-    // only remains in "Recent" here.
-    await assertRecordInWorkqueue({
-      page: ownUserPage,
-      name: childName,
-      workqueues: [{ title: 'Recent', exists: true }]
-    })
-
-    // Office closure shouldn't hide the record from the wider jurisdiction.
-    const registrarPage = await newPage(browser)
-    await login(registrarPage, CREDENTIALS.REGISTRAR)
-    await assertRecordInWorkqueue({
-      page: registrarPage,
-      name: childName,
-      workqueues: [{ title: 'Pending registration', exists: true }]
-    })
-  })
-
-  test('Transfer (inactivate-old + create-new) keeps old records under the old entity and routes new records to the new entity', async ({
-    browser
-  }) => {
-    const oldOfficeName = `E2E Transfer Old Office ${uuidv4()}`
-    const oldOffice = await createOffice(
-      systemAdminToken,
-      ibomboAreaId,
-      oldOfficeName
-    )
-
-    const oldUser = await provisionUserInOffice(
-      systemAdminToken,
-      oldOffice.id,
-      'REGISTRATION_AGENT'
-    )
-
-    await activateUserViaApi(oldUser.username)
-    const oldUserToken = await getToken(oldUser.username, NEW_USER_PASSWORD)
-
-    const { declaration: oldDeclaration, eventId: oldEventId } =
-      await createDeclaration(oldUserToken, undefined, ActionType.DECLARE)
-    const oldChildName = formatV2ChildName(oldDeclaration as any)
-    expect(oldEventId).toBeTruthy()
-
-    // Transfer recipe: inactivate the old entity, create a successor separately.
-    await putLocationVersion(systemAdminToken, oldOffice.id, {
-      name: oldOffice.name,
-      externalId: oldOffice.externalId,
-      status: 'inactive',
-      effectiveFrom: '2020-06-01',
-      lastVersionId: oldOffice.versions[0].versionId
-    })
-
-    // The successor side reuses the seeded Pualula credential — only the old
-    // entity needs to be a throwaway we can safely inactivate.
-    const newUserToken = await getToken(
-      CREDENTIALS.REGISTRATION_OFFICER_PUALULA
-    )
-
-    // record.search scopes by placeOfEvent — default place of birth ("Klow")
-    // is in Ibombo, so it must be overridden or the record is invisible here.
-    const pualulaAreas = await getAdministrativeAreas(newUserToken)
-    const oyaVillageId = getIdByName(pualulaAreas, 'Oya')
-    const newDeclarationData = await getDeclaration({
-      token: newUserToken,
-      partialDeclaration: {
-        'child.placeOfBirth': 'PRIVATE_HOME',
-        'child.birthLocation.privateHome': {
-          country: 'FAR',
-          addressType: AddressType.DOMESTIC,
-          administrativeArea: oyaVillageId
-        },
-        'child.birthLocationId': oyaVillageId
-      }
-    })
-    const { declaration: newDeclaration, eventId: newEventId } =
-      await createDeclaration(
-        newUserToken,
-        newDeclarationData,
+      const { declaration, eventId } = await createDeclaration(
+        userToken,
+        undefined,
         ActionType.DECLARE
       )
-    const newChildName = formatV2ChildName(newDeclaration as any)
-    expect(newEventId).toBeTruthy()
+      const childName = formatV2ChildName(declaration as any)
+      expect(eventId).toBeTruthy()
 
-    // Old record still reachable to an Ibombo registrar.
-    const ibomboRegistrarPage = await newPage(browser)
-    await login(ibomboRegistrarPage, CREDENTIALS.REGISTRAR)
-    await assertRecordInWorkqueue({
-      page: ibomboRegistrarPage,
-      name: oldChildName,
-      workqueues: [{ title: 'Pending registration', exists: true }]
-    })
+      await putLocationVersion(systemAdminToken, office.id, {
+        name: 'Renamed Office After Go-Live',
+        externalId: office.externalId,
+        status: 'active',
+        effectiveFrom: '2020-06-01',
+        lastVersionId: office.versions[0].versionId
+      })
 
-    // New record reachable to a Pualula registrar, not to the old Ibombo one.
-    const pualulaRegistrarPage = await newPage(browser)
-    await login(pualulaRegistrarPage, CREDENTIALS.REGISTRAR_PUALULA)
-    await assertRecordInWorkqueue({
-      page: pualulaRegistrarPage,
-      name: newChildName,
-      workqueues: [{ title: 'Pending registration', exists: true }]
-    })
-    await assertRecordInWorkqueue({
-      page: ibomboRegistrarPage,
-      name: newChildName,
-      workqueues: [{ title: 'Pending registration', exists: false }]
-    })
-  })
+      // A different Ibombo registrar should still resolve the record post-rename.
+      const registrarPage = await newPage(browser)
+      await login(registrarPage, CREDENTIALS.REGISTRAR)
+      await assertRecordInWorkqueue({
+        page: registrarPage,
+        name: childName,
+        workqueues: [{ title: 'Pending registration', exists: true }]
+      })
+    }
+  )
+
+  test(
+    'Inactivating an office keeps its Notified/Declared records reachable and processable to the same administrative area',
+    { tag: ['@technical'] },
+    async ({ browser }) => {
+      const officeName = `E2E Inactivate Office ${uuidv4()}`
+      const office = await createOffice(
+        systemAdminToken,
+        ibomboAreaId,
+        officeName
+      )
+
+      const { username } = await provisionUserInOffice(
+        systemAdminToken,
+        office.id,
+        'REGISTRATION_AGENT'
+      )
+
+      await activateUserViaApi(username)
+      const userToken = await getToken(username, NEW_USER_PASSWORD)
+
+      const { declaration, eventId } = await createDeclaration(
+        userToken,
+        undefined,
+        ActionType.DECLARE
+      )
+      const childName = formatV2ChildName(declaration as any)
+      expect(eventId).toBeTruthy()
+
+      // Log in before inactivating — fresh logins for an inactive office are
+      // blocked. Waiting for "Recent" also confirms the client's office-status
+      // check cached "active" before inactivation, avoiding a race.
+      const ownUserPage = await newPage(browser)
+      await loginAsProvisionedUser(ownUserPage, username)
+      await expect(
+        ownUserPage.getByRole('button', { name: 'Recent' })
+      ).toBeVisible({ timeout: 30_000 })
+
+      await putLocationVersion(systemAdminToken, office.id, {
+        name: office.name,
+        externalId: office.externalId,
+        status: 'inactive',
+        effectiveFrom: '2020-06-01',
+        lastVersionId: office.versions[0].versionId
+      })
+
+      // Their session should still see the record. A Registration Officer's
+      // own DECLARE auto-validates, so it moves to the registrar's queue and
+      // only remains in "Recent" here.
+      await assertRecordInWorkqueue({
+        page: ownUserPage,
+        name: childName,
+        workqueues: [{ title: 'Recent', exists: true }]
+      })
+
+      // Office closure shouldn't hide the record from the wider jurisdiction.
+      const registrarPage = await newPage(browser)
+      await login(registrarPage, CREDENTIALS.REGISTRAR)
+      await assertRecordInWorkqueue({
+        page: registrarPage,
+        name: childName,
+        workqueues: [{ title: 'Pending registration', exists: true }]
+      })
+    }
+  )
+
+  test(
+    'Transfer (inactivate-old + create-new) keeps old records under the old entity and routes new records to the new entity',
+    { tag: ['@technical'] },
+    async ({ browser }) => {
+      const oldOfficeName = `E2E Transfer Old Office ${uuidv4()}`
+      const oldOffice = await createOffice(
+        systemAdminToken,
+        ibomboAreaId,
+        oldOfficeName
+      )
+
+      const oldUser = await provisionUserInOffice(
+        systemAdminToken,
+        oldOffice.id,
+        'REGISTRATION_AGENT'
+      )
+
+      await activateUserViaApi(oldUser.username)
+      const oldUserToken = await getToken(oldUser.username, NEW_USER_PASSWORD)
+
+      const { declaration: oldDeclaration, eventId: oldEventId } =
+        await createDeclaration(oldUserToken, undefined, ActionType.DECLARE)
+      const oldChildName = formatV2ChildName(oldDeclaration as any)
+      expect(oldEventId).toBeTruthy()
+
+      // Transfer recipe: inactivate the old entity, create a successor separately.
+      await putLocationVersion(systemAdminToken, oldOffice.id, {
+        name: oldOffice.name,
+        externalId: oldOffice.externalId,
+        status: 'inactive',
+        effectiveFrom: '2020-06-01',
+        lastVersionId: oldOffice.versions[0].versionId
+      })
+
+      // The successor side reuses the seeded Pualula credential — only the old
+      // entity needs to be a throwaway we can safely inactivate.
+      const newUserToken = await getToken(
+        CREDENTIALS.REGISTRATION_OFFICER_PUALULA
+      )
+
+      // record.search scopes by placeOfEvent — default place of birth ("Klow")
+      // is in Ibombo, so it must be overridden or the record is invisible here.
+      const pualulaAreas = await getAdministrativeAreas(newUserToken)
+      const oyaVillageId = getIdByName(pualulaAreas, 'Oya')
+      const newDeclarationData = await getDeclaration({
+        token: newUserToken,
+        partialDeclaration: {
+          'child.placeOfBirth': 'PRIVATE_HOME',
+          'child.birthLocation.privateHome': {
+            country: 'FAR',
+            addressType: AddressType.DOMESTIC,
+            administrativeArea: oyaVillageId
+          },
+          'child.birthLocationId': oyaVillageId
+        }
+      })
+      const { declaration: newDeclaration, eventId: newEventId } =
+        await createDeclaration(
+          newUserToken,
+          newDeclarationData,
+          ActionType.DECLARE
+        )
+      const newChildName = formatV2ChildName(newDeclaration as any)
+      expect(newEventId).toBeTruthy()
+
+      // Old record still reachable to an Ibombo registrar.
+      const ibomboRegistrarPage = await newPage(browser)
+      await login(ibomboRegistrarPage, CREDENTIALS.REGISTRAR)
+      await assertRecordInWorkqueue({
+        page: ibomboRegistrarPage,
+        name: oldChildName,
+        workqueues: [{ title: 'Pending registration', exists: true }]
+      })
+
+      // New record reachable to a Pualula registrar, not to the old Ibombo one.
+      const pualulaRegistrarPage = await newPage(browser)
+      await login(pualulaRegistrarPage, CREDENTIALS.REGISTRAR_PUALULA)
+      await assertRecordInWorkqueue({
+        page: pualulaRegistrarPage,
+        name: newChildName,
+        workqueues: [{ title: 'Pending registration', exists: true }]
+      })
+      await assertRecordInWorkqueue({
+        page: ibomboRegistrarPage,
+        name: newChildName,
+        workqueues: [{ title: 'Pending registration', exists: false }]
+      })
+    }
+  )
 
   test(
     'User is not auto-reassigned but is locked out from login when their office is inactivated',
@@ -423,63 +431,65 @@ test.describe('Jurisdiction & routing under location versioning', () => {
     }
   )
 
-  test('Inactivating an office keeps its Notified records reachable to the same administrative area', async ({
-    browser
-  }) => {
-    const officeName = `E2E Notify Office ${uuidv4()}`
-    const office = await createOffice(
-      systemAdminToken,
-      ibomboAreaId,
-      officeName
-    )
+  test(
+    'Inactivating an office keeps its Notified records reachable to the same administrative area',
+    { tag: ['@technical'] },
+    async ({ browser }) => {
+      const officeName = `E2E Notify Office ${uuidv4()}`
+      const office = await createOffice(
+        systemAdminToken,
+        ibomboAreaId,
+        officeName
+      )
 
-    // Hospital Official (the only notifier role) lacks record.declare, so it has no bucket to review
-    // its own notification in — the reachability check comes from a registrar.
-    const { username } = await provisionUserInOffice(
-      systemAdminToken,
-      office.id,
-      'HOSPITAL_CLERK'
-    )
+      // Hospital Official (the only notifier role) lacks record.declare, so it has no bucket to review
+      // its own notification in — the reachability check comes from a registrar.
+      const { username } = await provisionUserInOffice(
+        systemAdminToken,
+        office.id,
+        'HOSPITAL_CLERK'
+      )
 
-    await activateUserViaApi(username)
-    const userToken = await getToken(username, NEW_USER_PASSWORD)
+      await activateUserViaApi(username)
+      const userToken = await getToken(username, NEW_USER_PASSWORD)
 
-    const { declaration, eventId } = await createDeclaration(
-      userToken,
-      undefined,
-      ActionType.NOTIFY
-    )
-    const childName = formatV2ChildName(declaration as any)
-    expect(eventId).toBeTruthy()
+      const { declaration, eventId } = await createDeclaration(
+        userToken,
+        undefined,
+        ActionType.NOTIFY
+      )
+      const childName = formatV2ChildName(declaration as any)
+      expect(eventId).toBeTruthy()
 
-    // Log in before inactivating (see the earlier test for why).
-    const ownUserPage = await newPage(browser)
-    await loginAsProvisionedUser(ownUserPage, username)
-    await expect(
-      ownUserPage.getByRole('button', { name: 'Recent' })
-    ).toBeVisible({ timeout: 30_000 })
+      // Log in before inactivating (see the earlier test for why).
+      const ownUserPage = await newPage(browser)
+      await loginAsProvisionedUser(ownUserPage, username)
+      await expect(
+        ownUserPage.getByRole('button', { name: 'Recent' })
+      ).toBeVisible({ timeout: 30_000 })
 
-    await putLocationVersion(systemAdminToken, office.id, {
-      name: office.name,
-      externalId: office.externalId,
-      status: 'inactive',
-      effectiveFrom: '2020-06-01',
-      lastVersionId: office.versions[0].versionId
-    })
+      await putLocationVersion(systemAdminToken, office.id, {
+        name: office.name,
+        externalId: office.externalId,
+        status: 'inactive',
+        effectiveFrom: '2020-06-01',
+        lastVersionId: office.versions[0].versionId
+      })
 
-    // Re-confirms the notifier's own session still works post-inactivation;
-    // the real reachability check is the registrar below.
-    await expect(
-      ownUserPage.getByRole('button', { name: 'Recent' })
-    ).toBeVisible({ timeout: 30_000 })
+      // Re-confirms the notifier's own session still works post-inactivation;
+      // the real reachability check is the registrar below.
+      await expect(
+        ownUserPage.getByRole('button', { name: 'Recent' })
+      ).toBeVisible({ timeout: 30_000 })
 
-    // An Ibombo registrar (different office) should still see the notification.
-    const registrarPage = await newPage(browser)
-    await login(registrarPage, CREDENTIALS.REGISTRAR)
-    await assertRecordInWorkqueue({
-      page: registrarPage,
-      name: childName,
-      workqueues: [{ title: 'Notifications', exists: true }]
-    })
-  })
+      // An Ibombo registrar (different office) should still see the notification.
+      const registrarPage = await newPage(browser)
+      await login(registrarPage, CREDENTIALS.REGISTRAR)
+      await assertRecordInWorkqueue({
+        page: registrarPage,
+        name: childName,
+        workqueues: [{ title: 'Notifications', exists: true }]
+      })
+    }
+  )
 })

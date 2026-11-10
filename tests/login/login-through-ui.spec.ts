@@ -17,27 +17,31 @@ import {
 import { createPIN, ensureLoginPageReady } from '@support/helpers'
 import { expect, test } from '@playwright/test'
 
-test('Log in through the login app', async ({ page }) => {
-  await test.step('Enter the username and password', async () => {
-    await page.goto(LOGIN_URL)
-    await ensureLoginPageReady(page)
-    await page.locator('#username').fill(CREDENTIALS.REGISTRAR)
-    await page.locator('#password').fill(TEST_USER_PASSWORD)
-    await page.locator('#login-mobile-submit').click()
-    await expect(page.locator('#login-step-two-box')).toBeVisible()
-  })
-
-  await test.step('Enter the 2FA code', async () => {
-    await page.locator('#code').fill('000000')
-    await page.locator('#login-mobile-submit').click()
-    await expect(page).toHaveURL((url) => url.origin === CLIENT_URL)
-  })
-
-  await test.step('Create a PIN', async () => {
-    await createPIN(page)
-    // The first load installs the application, which can take 20 seconds.
-    await expect(page.locator('#ProfileMenu-dropdownMenu')).toBeVisible({
-      timeout: 30_000
+test(
+  'Log in through the login app',
+  { tag: ['@technical'] },
+  async ({ page }) => {
+    await test.step('Enter the username and password', async () => {
+      await page.goto(LOGIN_URL)
+      await ensureLoginPageReady(page)
+      await page.locator('#username').fill(CREDENTIALS.REGISTRAR)
+      await page.locator('#password').fill(TEST_USER_PASSWORD)
+      await page.locator('#login-mobile-submit').click()
+      await expect(page.locator('#login-step-two-box')).toBeVisible()
     })
-  })
-})
+
+    await test.step('Enter the 2FA code', async () => {
+      await page.locator('#code').fill('000000')
+      await page.locator('#login-mobile-submit').click()
+      await expect(page).toHaveURL((url) => url.origin === CLIENT_URL)
+    })
+
+    await test.step('Create a PIN', async () => {
+      await createPIN(page)
+      // The first load installs the application, which can take 20 seconds.
+      await expect(page.locator('#ProfileMenu-dropdownMenu')).toBeVisible({
+        timeout: 30_000
+      })
+    })
+  }
+)
