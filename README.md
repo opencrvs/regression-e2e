@@ -17,7 +17,9 @@ pnpm report                  # open the last HTML report
 
 GitHub Actions runs all the tests every night against `qa.opencrvs.dev`. You can also start a run from the **Actions** tab. The run uploads the HTML report and a CTRF JSON report.
 
-When a run fails, a Slack message goes to the QA channel. The message lists the failed tests and has a link to the run.
+After each run, a Slack message goes to the QA channel. The message tells if the run passed or failed, lists the failed tests, and has a link to the run.
+
+On CI, Playwright retries a failed test once. A test that passes on the retry is flaky. `reporting/retry-reporter.ts` records each test that needed a retry. The run summary and the Slack message list these tests. This is the same as in opencrvs-core.
 
 ## Pull requests
 

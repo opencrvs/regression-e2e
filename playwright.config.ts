@@ -16,15 +16,18 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   /*
-   * A retry hides a flaky test. We keep one retry on CI only so that the
-   * report shows the flaky tests. Fix each flaky test that the report shows.
+   * A retry hides a flaky test. We keep one retry on CI only so that we can
+   * find the flaky tests. retry-reporter.ts records each test that needed a
+   * retry. The nightly run shows them in the run summary and in Slack. Fix
+   * each flaky test that it shows.
    */
   retries: process.env.CI ? 1 : 0,
   workers: process.env.CI ? 4 : undefined,
   reporter: [
     ['list'],
     ['html', { open: 'never' }],
-    ['playwright-ctrf-json-reporter', { outputDir: 'ctrf' }]
+    ['playwright-ctrf-json-reporter', { outputDir: 'ctrf' }],
+    ['./reporting/retry-reporter.ts']
   ],
   use: {
     screenshot: 'only-on-failure',

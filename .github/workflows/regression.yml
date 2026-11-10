@@ -29,7 +29,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     outputs:
-      failed-tests: ${{ steps.summary.outputs.text }}
+      results: ${{ steps.summary.outputs.text }}
+      retries: ${{ steps.retries.outputs.slack }}
     env:
       DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
     steps:
@@ -53,7 +54,7 @@ jobs:
 
       - name: List the failed tests
         id: summary
-        if: ${{ failure() }}
+        if: ${{ !cancelled() }}
         run: |
           report=ctrf/ctrf-report.json
           if [ ! -f "$report" ]; then
@@ -63,11 +64,21 @@ jobs:
           {
             echo "text<<$delimiter"
             jq -r '
-              "\(.results.summary.failed) of \(.results.summary.tests) tests failed:",
-              (.results.tests[] | select(.status == "failed") | "• \(.name)")
+              .results as $r
+              | if $r.summary.failed > 0 then
+                  "\($r.summary.failed) of \($r.summary.tests) tests failed:",
+                  ($r.tests[] | select(.status == "failed") | "• \(.name)")
+                else
+                  "\($r.summary.passed) of \($r.summary.tests) tests passed."
+                end
             ' "$report"
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Summarise the retried tests
+        id: retries
+        if: ${{ !cancelled() }}
+        run: node reporting/summarise-retries.mjs retries/retries.json
 
       - name: Upload the report
         if: ${{ !cancelled() }}
@@ -77,29 +88,44 @@ jobs:
           path: |
             playwright-report/
             ctrf/
+            retries/
           retention-days: 30
 
   notify:
-    name: Send a Slack message on failure
+    name: Send a Slack message
     needs: test
     # A cancelled run does not send a message.
-    if: ${{ failure() }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-26.04
     steps:
       - name: Make the message
         env:
+          RESULT: ${{ needs.test.result }}
+          TRIGGER: ${{ github.event_name == 'schedule' && 'nightly run' || format('run by {0}', github.actor) }}
           DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          FAILED_TESTS: ${{ needs.test.outputs.failed-tests }}
+          RESULTS: ${{ needs.test.outputs.results }}
+          RETRIES: ${{ needs.test.outputs.retries }}
         run: |
+          if [ "$RESULT" = success ]; then
+            headline=":white_check_mark: The regression tests passed on $DOMAIN ($TRIGGER)."
+          else
+            headline=":x: The regression tests failed on $DOMAIN ($TRIGGER)."
+          fi
           jq -n \
-            --arg domain "$DOMAIN" \
+            --arg headline "$headline" \
             --arg url "$RUN_URL" \
-            --arg failed "$FAILED_TESTS" \
+            --arg results "$RESULTS" \
+            --arg retries "$RETRIES" \
             '{
               channel: "C02P91N0E1W",
-              text: ":x: The regression tests failed on \($domain). <\($url)|Open the run>\n\($failed)"
+              text: ([
+                "\($headline) <\($url)|Open the run>",
+                $results,
+                $retries
+              ] | map(select(. != "")) | join("\n"))
             }' > payload.json
+          cat payload.json
 
       - uses: slackapi/slack-github-action@v4.0.0
         with:
