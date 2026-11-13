@@ -46,8 +46,10 @@ test(
 ```
 
 - A test can cover more than one case. A case can be split across more than one test.
-- Add the tag only when the test checks all the expected results of the case. If the test checks only some of them, add `{ annotation: { type: 'partial', description: 'C1234: <what is not checked>' } }` and do not add the tag.
-- Each test is for a TestRail case. It has at least one case tag or one `partial` annotation.
+- Add the tag of each case that the test checks.
+- If a case is split across more than one test, add the tag to each test.
+- If no test checks an expected result of the case, add a comment in the test that tells which result and why.
+- Each test is for a TestRail case. It has at least one case tag.
 - `pnpm test --grep @C808` runs the tests for one case.
 
 ## TestRail map
@@ -68,7 +70,7 @@ Follow the [Playwright best practices](https://playwright.dev/docs/best-practice
 - **No flaky tests.** A flaky test gives a false failure, and then nobody trusts the suite. Examine each failure. Find the cause, and fix it. Do not add a retry or a longer timeout to hide it. On CI, the config retries a failed test once. This is only so that we can find the flaky tests. The weekly run lists each test that needed a retry in the run summary and in the Slack message. Fix a failing or flaky test before you automate new cases.
 - **No fixed waits.** `page.waitForTimeout()` is not permitted in `tests/`. Some helpers in `support/` still use it. Remove those calls when you change the helper. Wait for a response, or use a web-first assertion (`await expect(locator).toBeVisible()`), which waits for the condition.
 - **Self-healing.** A test can fail only because the UI changed, for example a new label. During a regression run, find these failures and update the test. A failure that shows a change in behaviour is a bug. Report it, and do not change the test to pass.
-- **Coverage.** The tags and the `partial` annotations (see [TestRail case IDs](#testrail-case-ids)) show which TestRail cases are automated and which are fully covered. Keep them correct, because the coverage report counts them.
+- **Coverage.** The tags (see [TestRail case IDs](#testrail-case-ids)) show which TestRail cases are automated. Keep them correct, because the coverage report counts them.
 - **Stable selectors.** The UI changes frequently. Use selectors in this order: `getByTestId`, an element `id`, `getByRole` with a name, `getByText`. Do not use CSS classes or the structure of the page.
 
 ## Login
