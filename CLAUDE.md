@@ -6,11 +6,12 @@ Write all text that a person reads (comments, test titles, commit messages) in S
 
 ## Choosing what to automate
 
-The QA team decides what to test and how. TestRail is the source. Automate the cases in this order:
+The QA team decides what to test and how. TestRail is the source. Each TestRail case has an **Automation priority** field. The field is required. Fix failing tests first, then automate the cases in this order:
 
-1. **High:** core workflows that users do every day, for example declare a birth, register a record, or correct a record. A failure here stops a user from doing their work.
-2. **Medium:** admin features, for example create a user, edit a user, or look at performance metrics. A failure here does not stop the work in a registration office, or it has a workaround.
-3. **Low:** small details, for example the validation of the child's birth weight. A failure here can cause a corner case or a minor data error, but it does not stop a workflow.
+1. **Critical:** automate the case in the current release.
+2. **High:** core workflows that need the most manual effort or a lot of test data, for example declare a birth, register a record, or correct a record. A failure here stops a user from doing their work.
+3. **Medium:** admin features, for example create a user, edit a user, or look at performance metrics. A failure here does not stop the work in a registration office, or it has a workaround.
+4. **Low:** small details, for example the validation of the child's birth weight. A failure here can cause a corner case or a minor data error, but it does not stop a workflow.
 
 Some cases cannot easily be automated, for example the 2FA code that the user gets in an SMS. Add each such case to `NOT-AUTOMATED.md` with the reason, so that the QA team can keep it in the manual regression.
 
@@ -19,11 +20,14 @@ Some cases cannot easily be automated, for example the 2FA code that the user ge
 1. Read the whole TestRail case: preconditions, steps, and expected results.
 2. Search `tests/` for the case ID. If a test already has the ID, extend that test.
 3. Look for a test of the same feature in `packages/testland/e2e/testcases` in [opencrvs-core](https://github.com/opencrvs/opencrvs-core). Reuse its selectors and its way to wait for the application.
-4. Put the test in the `tests/<feature>/` folder for its feature. Make a new folder if no folder fits.
+4. Put the test in `tests/<suite>/<section>/`. Use the suite key and the section key from `support/testrail.map.ts` (see [TestRail map](#testrail-map)).
+   - Give the spec file a short name that tells what the test does, for example `revoke-and-reinstate.spec.ts`.
+   - If a test covers cases from more than one section, put it in the section of its main case.
+   - If the case is in a TestRail subsection, use the folder of the parent section.
 5. Create the test data through the API (see [Test data](#test-data)). Use the UI only for the behaviour that the case tests.
 6. Write one `test()` for each scenario. Use one `test.step()` for each TestRail step, with the expected result as an `expect`.
 7. Run the test three times with `pnpm test <file> --repeat-each 3`. All three runs must pass.
-8. Run `pnpm typecheck` and `pnpm lint`.
+8. Run `pnpm typecheck`, `pnpm lint` and `pnpm format:check`. The pull request checks run the same commands.
 
 The work is complete when each expected result in the TestRail case has an `expect`, or has a comment that tells why it does not.
 
@@ -45,6 +49,15 @@ test(
 - Add the tag only when the test checks all the expected results of the case. If the test checks only some of them, add `{ annotation: { type: 'partial', description: 'C1234: <what is not checked>' } }` and do not add the tag.
 - Each test is for a TestRail case. It has at least one case tag or one `partial` annotation.
 - `pnpm test --grep @C808` runs the tests for one case.
+
+## TestRail map
+
+`support/testrail.map.ts` lists the TestRail suites and their sections. Each suite key is a folder in `tests/`. Each section key is a folder in its suite folder. The spec files go in the section folder: `tests/<suite>/<section>/<name>.spec.ts`.
+
+- Use only the folder names that are in the map.
+- If TestRail gets a new suite or section, add it to the map in the same pull request as the test.
+- If the name of a suite or section changes in TestRail, change the key in the map and rename the folder in the same pull request.
+- The map has only suites and sections. Do not add test cases or file paths to it. The case tags in the tests show the coverage.
 
 ## Test principles
 
