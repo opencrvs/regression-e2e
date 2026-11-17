@@ -12,6 +12,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { faker } from '@faker-js/faker'
 import { format, subDays } from 'date-fns'
 import {
+  formatDateObjectTo_dMMMMyyyy,
   getToken,
   joinValuesWith,
   login,
@@ -24,6 +25,7 @@ import {
   fillDate,
   REQUIRED_VALIDATION_ERROR
 } from '@support/birth/helpers'
+import { clickWorkqueueActionByTitle } from '@support/print-certificate/birth/helpers'
 import { createBirthDraftViaApi } from '@support/test-data/api-actions'
 
 // A new form first has a temporary id (`tmp-...`). The app replaces it with
@@ -92,12 +94,72 @@ async function expectFormPageButtons(page: Page) {
   await page.keyboard.press('Escape')
 }
 
+type Declaration = ReturnType<typeof makeDeclaration>
+
 async function fillChildName(
   page: Page,
   child: { firstname: string; surname: string }
 ) {
   await page.locator('#firstname').fill(child.firstname)
   await page.locator('#surname').fill(child.surname)
+}
+
+async function fillChildDetails(page: Page, child: Declaration['child']) {
+  await fillChildName(page, child)
+  await page.locator('#child____gender').click()
+  await page.getByText(child.gender, { exact: true }).click()
+  await fillDate(page, child.dob)
+  await page.locator('#child____placeOfBirth').click()
+  await page.getByText(child.placeOfBirth, { exact: true }).click()
+  await page
+    .locator('#child____birthLocation')
+    .fill(child.birthLocation.slice(0, 3))
+  await page.getByText(child.birthLocation, { exact: true }).click()
+}
+
+async function expectSaveAndExitModal(page: Page) {
+  await expect(
+    page.getByRole('heading', { name: 'Save & exit?' })
+  ).toBeVisible()
+  await expect(
+    page.getByText(
+      'All inputted data will be kept secure for future editing. Are you ready to save any changes to this declaration form?'
+    )
+  ).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Confirm' })).toBeVisible()
+}
+
+/**
+ * Opens the draft from "Drafts" with "Update". Then checks that the Review
+ * page shows the child's details that the test entered before "Save & Exit".
+ */
+async function expectDraftHasChildDetails(
+  page: Page,
+  childName: string,
+  child: Declaration['child']
+) {
+  await assertRecordInWorkqueue({
+    page,
+    name: childName,
+    workqueues: [{ title: 'Drafts', exists: true }]
+  })
+  await clickWorkqueueActionByTitle(page, childName, 'Update')
+  await expect(page).toHaveURL(/\/review/)
+
+  await expect(page.getByTestId('child.name-value')).toContainText(childName)
+  await expect(page.getByTestId('child.gender-value')).toContainText(
+    child.gender
+  )
+  await expect(page.getByTestId('child.dob-value')).toContainText(
+    formatDateObjectTo_dMMMMyyyy(child.dob)
+  )
+  await expect(page.getByTestId('child.placeOfBirth-value')).toContainText(
+    child.placeOfBirth
+  )
+  await expect(page.getByTestId('child.birthLocation-value')).toContainText(
+    child.birthLocation
+  )
 }
 
 /**
@@ -185,20 +247,7 @@ test(
       // TestRail case "Validate Child's details page".
       await expectFormPageButtons(page)
 
-      await fillChildName(page, declaration.child)
-      await page.locator('#child____gender').click()
-      await page.getByText(declaration.child.gender, { exact: true }).click()
-      await fillDate(page, declaration.child.dob)
-      await page.locator('#child____placeOfBirth').click()
-      await page
-        .getByText(declaration.child.placeOfBirth, { exact: true })
-        .click()
-      await page
-        .locator('#child____birthLocation')
-        .fill(declaration.child.birthLocation.slice(0, 3))
-      await page
-        .getByText(declaration.child.birthLocation, { exact: true })
-        .click()
+      await fillChildDetails(page, declaration.child)
 
       await page.getByRole('button', { name: 'Continue' }).click()
       await expect(
@@ -208,7 +257,8 @@ test(
 
     await test.step('5. Validate the "Informant details" page', async () => {
       // Expected result 2 (the fields of the page) is covered by the
-      // TestRail case "Validate Informant's details page".
+      // TestRail case "Validate Informant's details page when informant is
+      // not father/ mother".
       await expectFormPageButtons(page)
       await expect(page.locator('#informant____relation')).toBeVisible()
 
@@ -264,11 +314,14 @@ test(
     })
 
     await test.step('10. Validate the "Review" page', async () => {
+      // Expected result 2 (the review block) is covered by the TestRail case
+      // "Validate declaration review page".
       await expect(page.getByTestId('child.name-value')).toContainText(
         childName
       )
 
-      // The attached file viewer. The test did not attach a file.
+      // The attached file viewer. The test did not attach a file, so the
+      // viewer has no dropdown of files. The test does not check the dropdown.
       await expect(page.getByText('No supporting documents')).toBeVisible()
       // The (X) button to exit without saving.
       await expect(page.getByTestId('exit-button')).toBeVisible()
@@ -288,29 +341,76 @@ test(
       await page.getByRole('button', { name: 'Action', exact: true }).click()
     })
 
+    // This test uses "Save & Exit" in the action menu of the Review page. The
+    // test '"Save & Exit" on a form page keeps the data' uses the button on
+    // a form page.
     await test.step('11. Validate "Save & Exit"', async () => {
       await page.getByRole('button', { name: 'Action', exact: true }).click()
       await page.getByText('Save & Exit', { exact: true }).click()
-
-      const modalTitle = page.getByRole('heading', { name: 'Save & exit?' })
-      await expect(modalTitle).toBeVisible()
-      await expect(
-        page.getByText(
-          'All inputted data will be kept secure for future editing. Are you ready to save any changes to this declaration form?'
-        )
-      ).toBeVisible()
+      await expectSaveAndExitModal(page)
 
       await page.getByRole('button', { name: 'Cancel' }).click()
-      await expect(modalTitle).toBeHidden()
+      await expect(
+        page.getByRole('heading', { name: 'Save & exit?' })
+      ).toBeHidden()
 
       await triggerDeclarationAction(page, 'Save & Exit')
 
-      await expect(page).not.toHaveURL(/\/review/)
-      await assertRecordInWorkqueue({
-        page,
-        name: childName,
-        workqueues: [{ title: 'Drafts', exists: true }]
+      await expect(page).not.toHaveURL(DECLARATION_FORM_URL)
+      await expectDraftHasChildDetails(page, childName, declaration.child)
+      await expect(page.getByTestId('informant.relation-value')).toContainText(
+        declaration.informant.relation
+      )
+      await expect(page.getByTestId('informant.email-value')).toContainText(
+        declaration.informant.email
+      )
+    })
+  }
+)
+
+// The steps run in the order 11.1, 11.3, 11.2: "Cancel" must run while the
+// form is still open, before "Confirm" closes it.
+test(
+  '"Save & Exit" on a form page keeps the data',
+  { tag: ['@C3398'] },
+  async ({ page }) => {
+    const declaration = makeDeclaration()
+    const childName = joinValuesWith([
+      declaration.child.firstname,
+      declaration.child.surname
+    ])
+
+    await test.step('Setup: Log in and fill the "Child details" page', async () => {
+      await login(page, CREDENTIALS.REGISTRAR)
+      await startBirthDeclaration(page)
+      await fillChildDetails(page, declaration.child)
+    })
+
+    await test.step('11.1 Click "Save & Exit" on the "Child details" page', async () => {
+      await page.getByRole('button', { name: 'Save & Exit' }).click()
+      await expectSaveAndExitModal(page)
+    })
+
+    await test.step('11.3 Click "Cancel" (run before 11.2)', async () => {
+      await page.getByRole('button', { name: 'Cancel' }).click()
+
+      await expect(
+        page.getByRole('heading', { name: 'Save & exit?' })
+      ).toBeHidden()
+      await expect(page).toHaveURL(CHILD_DETAILS_URL)
+      await expect(page.locator('#firstname')).toHaveValue(
+        declaration.child.firstname
+      )
+    })
+
+    await test.step('11.2 Click "Confirm"', async () => {
+      await page.getByRole('button', { name: 'Save & Exit' }).click()
+      await waitForActionResponses(page, ['event.draft.create'], async () => {
+        await page.getByRole('button', { name: 'Confirm' }).click()
       })
+
+      await expect(page).not.toHaveURL(DECLARATION_FORM_URL)
+      await expectDraftHasChildDetails(page, childName, declaration.child)
     })
   }
 )
@@ -335,6 +435,8 @@ test(
         declaration.child.firstname
       )
       // The child's sex is a required field that the test did not fill.
+      // The test checks the "Required" text. It does not check the red
+      // colour, because a colour check depends on the CSS of the page.
       await expect(page.getByTestId('child.gender-value')).toHaveText(
         REQUIRED_VALIDATION_ERROR
       )
