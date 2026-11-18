@@ -41,7 +41,9 @@ const child = {
     // TestRail steps 1.1 and 2.1. The field shows an error for this name.
     invalid: 'John_Peter',
     // The start of the error message. The full message in the UI is a little
-    // different from the message in TestRail.
+    // different from the message in TestRail. TestRail has "Input contains
+    // invalid characters. Please use only letters (a-z, A-Z), numbers (0-9),
+    // hyphen (-), and apostrophe(')".
     invalidError: 'Input contains invalid characters',
     valid: faker.person.firstName(),
     lessThan33Characters: 'Rakibul Islam',
@@ -153,13 +155,21 @@ test.afterAll(async () => {
   )
 })
 
+// The options of an open dropdown. Only the open dropdown has these ids, so
+// the test clicks an option in the list, not the same text in other places on
+// the page.
+const DROPDOWN_OPTIONS = '[id^="react-select-"][id*="-option-"]'
+
 async function selectDropdownOption(
   page: Page,
   fieldId: string,
   option: string
 ) {
   await page.locator(fieldId).click()
-  await page.getByText(option, { exact: true }).click()
+  await page
+    .locator(DROPDOWN_OPTIONS)
+    .getByText(option, { exact: true })
+    .click()
   await expect(page.locator(fieldId)).toContainText(option)
 }
 
@@ -274,6 +284,7 @@ test(
 
     await test.step('11. Click "Continue"', async () => {
       await page.getByRole('button', { name: 'Continue' }).click()
+      await expect(page).toHaveURL(/\/pages\/informant/)
       await expect(
         page.getByText("Informant's details", { exact: true })
       ).toBeVisible()
@@ -374,17 +385,14 @@ test(
     })
 
     await test.step('6.2 Open the "Place of delivery" dropdown', async () => {
+      const options = page.locator(DROPDOWN_OPTIONS)
       await page.locator('#child____placeOfBirth').click()
 
       // The registrar can select all 3 types of place.
-      for (const option of child.options.placeOfBirth) {
-        await expect(page.getByText(option, { exact: true })).toBeVisible()
-      }
+      await expect(options).toHaveText(child.options.placeOfBirth)
 
       await page.keyboard.press('Escape')
-      await expect(
-        page.getByText('Residential address', { exact: true })
-      ).toBeHidden()
+      await expect(options).toHaveCount(0)
     })
 
     await test.step('6.2 Select "Health Institution"', async () => {
@@ -397,6 +405,8 @@ test(
         '#child____placeOfBirth',
         'Health Institution'
       )
+      // TestRail calls the new dropdown "Location of birth". The UI label is
+      // "Health Institution".
       await expect(page.locator('#child____birthLocation')).toBeVisible()
 
       // The list has only the health institutions of the jurisdiction of the
@@ -439,9 +449,12 @@ test(
       }
       // 6.2 The jurisdiction of the registrar is one district. So the
       // province and the district are disabled, and the test cannot select a
-      // different value (7.3 and 7.4).
+      // different value (7.3 and 7.4). The country and the village are
+      // enabled.
       await expect(form.locator('#province')).toBeDisabled()
       await expect(form.locator('#district')).toBeDisabled()
+      await expect(form.locator('#country')).toBeEnabled()
+      await expect(form.locator('#village')).toBeEnabled()
       // 7.2 The test keeps the default country. A different country replaces
       // the Farajaland fields that steps 7.3–7.5 check.
 
@@ -470,6 +483,10 @@ test(
       for (const id of ['country', 'province', 'district', 'village']) {
         await expect(form.locator(`#${id}`)).toHaveCount(1)
       }
+      await expect(form.locator('#province')).toBeDisabled()
+      await expect(form.locator('#district')).toBeDisabled()
+      await expect(form.locator('#country')).toBeEnabled()
+      await expect(form.locator('#village')).toBeEnabled()
       for (const value of Object.values(child.address.defaults)) {
         await expect(form.getByText(value, { exact: true })).toBeVisible()
       }
@@ -518,6 +535,9 @@ test(
   }
 )
 
+// The steps run in the order 2.3, then 1.3. Each step keeps one name empty
+// and fills the other name. The test first fills only the first name, so the
+// empty surname (2.3) comes first.
 test(
   'Empty required fields show "Required" on the review page',
   { tag: ['@C2666'] },
@@ -563,6 +583,10 @@ test(
       )
     })
 
+    // TestRail step 7 says that each empty address dropdown shows "Required".
+    // The country, the province and the district always have a default
+    // value, and the province and the district are disabled. So the test can
+    // only keep the village empty.
     await test.step('7. The village of the address is empty', async () => {
       await expect(
         page.getByTestId('child.birthLocation.privateHome-value')
