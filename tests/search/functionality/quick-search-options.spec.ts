@@ -19,6 +19,9 @@ import {
   waitUntilSearchable
 } from '@support/search/quick-search-records'
 
+/** The longest time that the test waits for a search response. */
+const SEARCH_RESULT_TIMEOUT = 30_000
+
 /** How the search is sent: the Enter key, or a click on the search icon. */
 type Submit = 'enter' | 'icon'
 
@@ -39,8 +42,17 @@ async function search(page: Page, term: string, submit: Submit = 'enter') {
   }
   // The heading and the rows come from the same response, so the rows are
   // for this term when the heading shows it.
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get('term'), {
+      message: `The search for "${term}" was not sent`
+    })
+    .toBe(term)
+  // The page shows the previous results until the new results are ready.
+  // The heading and the rows come from the same response, so the rows are
+  // for this term when the heading shows it.
   await expect(page.locator('#content-name')).toHaveText(
-    `Search result for “${term}”`
+    `Search result for “${term}”`,
+    { timeout: SEARCH_RESULT_TIMEOUT }
   )
 }
 
