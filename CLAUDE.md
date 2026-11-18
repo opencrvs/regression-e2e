@@ -1,6 +1,10 @@
 # OpenCRVS regression tests
 
-The QA team owns this repository. Each test automates one or more TestRail test cases. The tests run against a deployed OpenCRVS environment with the Farajaland country configuration. The default environment is `qa.opencrvs.dev`. Set `DOMAIN` to use a different one. `package.json` has the commands.
+The QA team owns this repository. Each test automates one or more TestRail test cases. The tests run against a deployed OpenCRVS environment with the Farajaland country configuration. `package.json` has the commands. Set `DOMAIN` to select the environment:
+
+- **While you write and debug a test for a TestRail case:** use `e2e.opencrvs.dev`.
+- **For the final run of a finished test:** use `qa.opencrvs.dev`. This is the default.
+- **If one environment is down:** use the other one.
 
 Write all text that a person reads (comments, test titles, commit messages) in Simplified Technical English: short sentences, active voice, common words, one topic in each sentence.
 
