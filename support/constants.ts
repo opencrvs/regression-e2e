@@ -10,9 +10,9 @@
  */
 export const DOMAIN = process.env.DOMAIN || 'qa.opencrvs.dev'
 export const LOGIN_URL = `https://login.${DOMAIN}`
-export const AUTH_URL = `https://gateway.${DOMAIN}/auth`
+export const AUTH_URL = `https://login.${DOMAIN}/api/auth`
 export const CLIENT_URL = `https://register.${DOMAIN}`
-export const GATEWAY_HOST = `https://gateway.${DOMAIN}`
+export const GATEWAY_HOST = `https://register.${DOMAIN}/api`
 
 /*
  * This timeout is to ensure that all previous actions have been completed
