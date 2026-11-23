@@ -11,25 +11,24 @@
 import { faker } from '@faker-js/faker'
 import { expect } from '@playwright/test'
 import { createClient } from '@opencrvs/toolkit/api'
-import { ActionType, AddressType } from '@opencrvs/toolkit/events'
+import { ActionType, QueryType } from '@opencrvs/toolkit/events'
 import { CREDENTIALS, GATEWAY_HOST } from '@support/constants'
 import { getToken } from '@support/helpers'
-import { getAdministrativeAreas, getIdByName } from '@support/birth/helpers'
 import {
   createDeclaration as createBirth,
   getDeclaration as getBirthDeclaration
 } from '@support/test-data/birth-declaration'
 import { createDeclaration as createDeath } from '@support/test-data/death-declaration'
-import {
-  archiveViaApi,
-  createBirthDraftViaApi,
-  customActionViaApi
-} from '@support/test-data/api-actions'
-import { getSignatureFile, uploadFile } from '@support/test-data/utils'
 
 /*
- * Test data for quick search (TestRail C2491 and its extensions).
- * The records are TD-01 to TD-09 in the test data workbook
+ * Test data for quick search (TestRail C2491). Each test in
+ * quick-search-options.spec.ts creates only the records that it needs:
+ * - ID test: a registered record (createIdRecord).
+ * - Name test: TD-01, TD-02 and TD-04 (createNameRecords).
+ * - Short-name test: TD-03 (createShortNameRecord).
+ * - Extra checks: a birth record and a death record, TD-05
+ *   (createExtraCheckRecords).
+ * The TD numbers are the records in the test data workbook
  * test-data-search-quick-search-2026-11-17.xlsx.
  *
  * The names are random, so that parallel runs do not collide. Each run
@@ -44,9 +43,10 @@ import { getSignatureFile, uploadFile } from '@support/test-data/utils'
 const VOWELS = 'aeiou'
 const CONSONANTS = 'bcdfghjklmnprstvwz'
 const LETTERS = 'abcdefghijklmnopqrstuvwxyz'
-// Rare letters for the short names, so that few other records are within
-// 1 edit and the record stays on the first page of results.
-const RARE = 'jqvxz'
+// Rare letters (no vowels) for the short names. A word of these letters is
+// not a real name, so few other records are within 1 edit of it.
+// 8 letters give 64 two-letter names and 4,096 four-letter names.
+const RARE = 'jkqvwxyz'
 
 const pick = (chars: string) => faker.helpers.arrayElement(chars.split(''))
 const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
@@ -93,7 +93,7 @@ function swap(value: string, positions: number[]) {
  * repeated edits of one substring). This is the distance that
  * Elasticsearch uses when transpositions are on (the default).
  */
-export function editDistance(a: string, b: string) {
+function editDistance(a: string, b: string) {
   const s = a.toLowerCase()
   const t = b.toLowerCase()
   const d: number[][] = Array.from({ length: s.length + 1 }, (_, i) =>
@@ -117,8 +117,39 @@ export function editDistance(a: string, b: string) {
   return d[s.length][t.length]
 }
 
-function buildNames() {
-  // TD-01 (A)
+/**
+ * Builds names with `build` until `check` finds no problem. `check`
+ * returns the reason why the names do not give the planned distances.
+ */
+function buildChecked<T>(
+  build: () => T,
+  check: (names: T) => string | undefined
+): T {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const names = build()
+    if (!check(names)) return names
+  }
+  throw new Error(
+    'Could not build quick search names with the planned distances'
+  )
+}
+
+type DistanceRule = [string, string, (distance: number) => boolean]
+
+function firstFailedRule(rules: DistanceRule[]) {
+  for (const [term, name, ok] of rules) {
+    const distance = editDistance(term, name)
+    if (!ok(distance)) return `${term} -> ${name} = ${distance}`
+  }
+  return undefined
+}
+
+/**
+ * Names for the name test: TD-01 (A), TD-02 (B, 1 edit from A in each
+ * child, father and informant name) and TD-04 (D, 3 edits from A in each
+ * child name). Also the fuzzy search words that are made from A's names.
+ */
+function buildLongNames() {
   const childFirst = word(9)
   const childSurname = word(10)
   const fatherFirst = word(6)
@@ -126,13 +157,9 @@ function buildNames() {
   const informantFirst = word(6)
   const informantSurname = word(8)
   const motherFirst = word(8)
-  const motherSurnameEnd = word(4)
+  // The part after the hyphen has 4 rare letters, so it is not a real name.
+  const motherSurnameEnd = rareWord(4)
   const motherSurname = `${word(8)}-${motherSurnameEnd}`
-
-  // TD-03 (C)
-  const shortChildFirst = rareWord(2)
-  const shortMotherFirst = rareWord(4)
-  const shortMotherSurname = word(9)
 
   return {
     a: {
@@ -146,8 +173,11 @@ function buildNames() {
       motherSurname,
       motherSurnameEnd
     },
-    // TD-02 (B): 1 edit from A in the child, father and informant names
     b: {
+      // Unrelated mother, so that dedup does not flag the record (every
+      // dedup rule needs a similar mother).
+      motherFirst: word(6),
+      motherSurname: word(9),
       childFirst: substitute(childFirst, [8]),
       childSurname: childSurname.slice(0, 3) + childSurname.slice(4),
       fatherFirst: substitute(fatherFirst, [0]),
@@ -155,14 +185,9 @@ function buildNames() {
       informantFirst: informantFirst + pick(CONSONANTS),
       informantSurname: informantSurname + pick(CONSONANTS)
     },
-    c: {
-      childFirst: shortChildFirst,
-      childSurname: word(10),
-      motherFirst: shortMotherFirst,
-      motherSurname: shortMotherSurname
-    },
-    // TD-04 (D): 3 edits from A in each child name
     d: {
+      motherFirst: word(8),
+      motherSurname: word(8),
       childFirst: substitute(childFirst, [1, 4, 6]),
       childSurname: substitute(childSurname, [2, 5, 8])
     },
@@ -170,37 +195,22 @@ function buildNames() {
       // More than 5 letters, 2 edits: matches A only
       twoSwaps: swap(childFirst, [2, 5]),
       twoSubstitutions: substitute(childFirst, [1, 7]),
-      // More than 5 letters, 2 edits: matches C
-      motherSurnameTwoEdits: substitute(shortMotherSurname, [7, 8]),
-      motherFirstPlusTwo: shortMotherFirst + pick(RARE) + pick(RARE),
-      // 3-5 letters, 1 edit: matches
+      // 3-5 letters, 1 edit: matches A
       surnameEndSwap: swap(motherSurnameEnd, [1]),
-      motherFirstOneEdit: substitute(shortMotherFirst, [3]),
-      motherFirstPlusOne: shortMotherFirst + pick(RARE),
-      childFirstPlusOne: shortChildFirst + pick(RARE),
-      // 3-5 letters, 2 edits: does not match
-      motherFirstTwoEdits: substitute(shortMotherFirst, [2, 3]),
-      motherFirstFiveTwoEdits:
-        substitute(shortMotherFirst, [1]).slice(0, 3) +
-        pick(LETTERS) +
-        shortMotherFirst.slice(3),
-      // 1-2 letters, 1 edit: does not match
-      childFirstOneEdit: substitute(shortChildFirst, [1]),
       unusedName: word(11)
     }
   }
 }
 
-type Names = ReturnType<typeof buildNames>
+type LongNames = ReturnType<typeof buildLongNames>
 
-/** Returns the reason why the names do not give the planned distances. */
-function checkNames(n: Names): string | undefined {
-  const rules: [string, string, (d: number) => boolean][] = [
+function checkLongNames(n: LongNames): string | undefined {
+  const failed = firstFailedRule([
     [n.a.childFirst, n.b.childFirst, (d) => d === 1],
     [n.a.childSurname, n.b.childSurname, (d) => d === 1],
     [n.a.fatherFirst, n.b.fatherFirst, (d) => d === 1],
-    [n.a.informantFirst, n.b.informantFirst, (d) => d === 1],
     [n.a.fatherSurname, n.b.fatherSurname, (d) => d === 1],
+    [n.a.informantFirst, n.b.informantFirst, (d) => d === 1],
     [n.a.informantSurname, n.b.informantSurname, (d) => d === 1],
     [n.a.childFirst, n.d.childFirst, (d) => d === 3],
     [n.b.childFirst, n.d.childFirst, (d) => d >= 3],
@@ -212,21 +222,13 @@ function checkNames(n: Names): string | undefined {
     [n.terms.twoSubstitutions, n.a.childFirst, (d) => d === 2],
     [n.terms.twoSubstitutions, n.b.childFirst, (d) => d >= 3],
     [n.terms.twoSubstitutions, n.d.childFirst, (d) => d >= 3],
-    [n.terms.motherSurnameTwoEdits, n.c.motherSurname, (d) => d === 2],
-    [n.terms.surnameEndSwap, n.a.motherSurnameEnd, (d) => d === 1],
-    [n.terms.motherFirstOneEdit, n.c.motherFirst, (d) => d === 1],
-    [n.terms.motherFirstTwoEdits, n.c.motherFirst, (d) => d === 2],
-    [n.terms.motherFirstFiveTwoEdits, n.c.motherFirst, (d) => d === 2],
-    [n.terms.childFirstOneEdit, n.c.childFirst, (d) => d === 1]
-  ]
-  for (const [term, name, ok] of rules) {
-    const distance = editDistance(term, name)
-    if (!ok(distance)) return `${term} -> ${name} = ${distance}`
-  }
-  if (n.terms.motherFirstFiveTwoEdits.length !== 5) return 'length'
+    [n.terms.surnameEndSwap, n.a.motherSurnameEnd, (d) => d === 1]
+  ])
+  if (failed) return failed
 
-  // Each TD-01 name must match only its own field: every other TD-01,
-  // TD-02 and TD-04 name of another field is at least 3 edits away.
+  // Each TD-01 name must match only its own field: every TD-01, TD-02 and
+  // TD-04 name of another field is at least 3 edits away. TD-02 and TD-04
+  // mothers are unrelated to every TD-01 name.
   const fields: [string, string[]][] = [
     ['childFirst', [n.a.childFirst, n.b.childFirst, n.d.childFirst]],
     ['childSurname', [n.a.childSurname, n.b.childSurname, n.d.childSurname]],
@@ -235,7 +237,9 @@ function checkNames(n: Names): string | undefined {
     ['informantFirst', [n.a.informantFirst, n.b.informantFirst]],
     ['informantSurname', [n.a.informantSurname, n.b.informantSurname]],
     ['motherFirst', [n.a.motherFirst]],
-    ['motherSurname', n.a.motherSurname.split('-')]
+    ['motherSurname', n.a.motherSurname.split('-')],
+    ['bMother', [n.b.motherFirst, n.b.motherSurname]],
+    ['dMother', [n.d.motherFirst, n.d.motherSurname]]
   ]
   for (const [field, values] of fields) {
     for (const [otherField, otherValues] of fields) {
@@ -249,27 +253,99 @@ function checkNames(n: Names): string | undefined {
       }
     }
   }
+
+  // The fuzzy search words must match TD-01 only: every TD-02 and TD-04
+  // name, and every other TD-01 name, is at least 3 edits away.
+  const allNames = fields.flatMap(([, values]) => values)
+  const termTargets: [string, string][] = [
+    [n.terms.twoSwaps, n.a.childFirst],
+    [n.terms.twoSubstitutions, n.a.childFirst],
+    [n.terms.surnameEndSwap, n.a.motherSurnameEnd]
+  ]
+  for (const [term, target] of termTargets) {
+    for (const name of allNames) {
+      if (name !== target && editDistance(term, name) < 3) {
+        return `${term} is near ${name}`
+      }
+    }
+  }
   return undefined
 }
 
-/** Builds random names that give the planned edit distances. */
-export function buildQuickSearchNames(): Names {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const names = buildNames()
-    if (!checkNames(names)) return names
+/**
+ * Names for the short-name test: TD-03 (C) with a 2-letter child name, a
+ * 4-letter mother name and a 9-letter mother surname, and the fuzzy search
+ * words that are made from them.
+ */
+function buildShortNames() {
+  const childFirst = rareWord(2)
+  const motherFirst = rareWord(4)
+  const motherSurname = word(9)
+  return {
+    c: { childFirst, childSurname: word(10), motherFirst, motherSurname },
+    terms: {
+      // More than 5 letters: 2 edits match, 3 edits do not
+      motherSurnameTwoEdits: substitute(motherSurname, [7, 8]),
+      motherSurnameThreeEdits: substitute(motherSurname, [2, 5, 8]),
+      motherFirstPlusTwo: motherFirst + pick(RARE) + pick(RARE),
+      // 3-5 letters: 1 edit matches
+      motherFirstOneEdit: substitute(motherFirst, [3]),
+      motherFirstPlusOne: motherFirst + pick(RARE),
+      childFirstPlusOne: childFirst + pick(RARE),
+      // 3-5 letters: 2 edits do not match
+      motherFirstTwoEdits: substitute(motherFirst, [2, 3]),
+      motherFirstFiveTwoEdits:
+        substitute(motherFirst, [1]).slice(0, 3) +
+        pick(RARE) +
+        motherFirst.slice(3),
+      // 1-2 letters: 1 edit does not match
+      childFirstOneEdit: substitute(childFirst, [1])
+    }
   }
-  throw new Error(
-    'Could not build quick search names with the planned distances'
-  )
 }
+
+type ShortNames = ReturnType<typeof buildShortNames>
+
+function checkShortNames(n: ShortNames): string | undefined {
+  if (n.terms.motherFirstFiveTwoEdits.length !== 5) return 'length'
+  return firstFailedRule([
+    [n.terms.motherSurnameTwoEdits, n.c.motherSurname, (d) => d === 2],
+    [n.terms.motherSurnameThreeEdits, n.c.motherSurname, (d) => d === 3],
+    [n.terms.motherFirstPlusTwo, n.c.motherFirst, (d) => d === 2],
+    [n.terms.motherFirstOneEdit, n.c.motherFirst, (d) => d === 1],
+    [n.terms.motherFirstPlusOne, n.c.motherFirst, (d) => d === 1],
+    [n.terms.childFirstPlusOne, n.c.childFirst, (d) => d === 1],
+    [n.terms.motherFirstTwoEdits, n.c.motherFirst, (d) => d === 2],
+    [n.terms.motherFirstFiveTwoEdits, n.c.motherFirst, (d) => d === 2],
+    [n.terms.childFirstOneEdit, n.c.childFirst, (d) => d === 1]
+  ])
+}
+
+const buildLongNameSet = () => buildChecked(buildLongNames, checkLongNames)
+const buildShortNameSet = () => buildChecked(buildShortNames, checkShortNames)
 
 const nid = () => faker.string.numeric(10)
 const phone = () => `07${faker.string.numeric(8)}`
 const email = (label: string) =>
   `${label}.${faker.string.alpha({ length: 6, casing: 'lower' })}@example.com`
 
-export const fullName = (first: string, surname: string) =>
-  `${first} ${surname}`
+const fullName = (first: string, surname: string) => `${first} ${surname}`
+
+/**
+ * Makes an invalid tracking ID or registration number: the last 3
+ * characters become other digits. Quick search also searches the word as a
+ * fuzzy name (up to 2 edits), and names have only letters, so 3 digits keep
+ * the word at least 3 edits from every name.
+ */
+export function invalidId(value: string) {
+  let result = value.slice(0, -3)
+  for (const current of value.slice(-3)) {
+    let next = pick('0123456789')
+    while (next === current) next = pick('0123456789')
+    result += next
+  }
+  return result
+}
 
 /** Changes the last character to another character of the same kind. */
 export function changeLastCharacter(value: string) {
@@ -280,47 +356,60 @@ export function changeLastCharacter(value: string) {
   return value.slice(0, -1) + next
 }
 
-async function getVillageId(token: string, name: string) {
-  return getIdByName(await getAdministrativeAreas(token), name)
-}
-
-function privateHomeIn(villageId: string) {
+/**
+ * The ID test record, registered by k.mweene: it has a tracking ID, a
+ * registration number, a mother NID, an informant phone and an email.
+ */
+export async function createIdRecord() {
+  const token = await getToken(CREDENTIALS.REGISTRAR)
+  const child = { firstname: word(8), surname: word(10) }
+  const values = { motherNid: nid(), phone: phone(), email: email('idrecord') }
+  const record = await createBirth(
+    token,
+    await getBirthDeclaration({
+      token,
+      partialDeclaration: {
+        'child.name': child,
+        'mother.nid': values.motherNid,
+        'informant.phoneNo': values.phone,
+        'informant.email': values.email
+      }
+    }),
+    ActionType.REGISTER
+  )
   return {
-    'child.placeOfBirth': 'PRIVATE_HOME',
-    'child.birthLocation.privateHome': {
-      country: 'FAR',
-      addressType: AddressType.DOMESTIC,
-      administrativeArea: villageId
-    },
-    'child.birthLocationId': villageId
+    ...values,
+    eventType: 'birth',
+    title: fullName(child.firstname, child.surname),
+    trackingId: record.trackingId as string,
+    registrationNumber: record.registrationNumber
   }
 }
 
 /**
- * Creates TD-01 to TD-05: the records that C2491 needs.
- * TD-01 is registered by k.mweene. TD-02 to TD-05 are declared by
- * f.katongo. The helpers put every place of event in Klow (Ibombo), so
- * k.mweene can find them.
+ * The name test records, declared by f.katongo:
+ * - TD-01 (A): every name field has its own name.
+ * - TD-02 (B): 1 edit from A in every child, father and informant name,
+ *   and an unrelated mother.
+ * - TD-04 (D): 3 edits from A in each child name. Must not match.
  */
-export async function createQuickSearchRecords() {
-  const names = buildQuickSearchNames()
-  const registrarToken = await getToken(CREDENTIALS.REGISTRAR)
-  const agentToken = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
-
-  // TD-01 (A): main record, registered, with all searchable values
-  const a = {
-    motherNid: nid(),
-    fatherNid: nid(),
-    informantNid: nid(),
-    phone: phone(),
-    email: email('td01')
+export async function createNameRecords() {
+  const names = buildLongNameSet()
+  const token = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
+  const fatherDetails = {
+    'father.detailsNotAvailable': false,
+    'father.nationality': 'FAR',
+    'father.idType': 'NATIONAL_ID',
+    'father.addressSameAs': 'YES'
   }
+
   const tdA = await createBirth(
-    registrarToken,
+    token,
     await getBirthDeclaration({
-      token: registrarToken,
+      token,
       informantRelation: 'BROTHER',
       partialDeclaration: {
+        ...fatherDetails,
         'child.name': {
           firstname: names.a.childFirst,
           surname: names.a.childSurname
@@ -329,55 +418,46 @@ export async function createQuickSearchRecords() {
           firstname: names.a.motherFirst,
           surname: names.a.motherSurname
         },
-        'mother.nid': a.motherNid,
-        'father.detailsNotAvailable': false,
         'father.name': {
           firstname: names.a.fatherFirst,
           surname: names.a.fatherSurname
         },
         'father.dob': '1993-07-22',
-        'father.nationality': 'FAR',
-        'father.idType': 'NATIONAL_ID',
-        'father.nid': a.fatherNid,
-        'father.addressSameAs': 'YES',
+        'father.nid': nid(),
         'informant.name': {
           firstname: names.a.informantFirst,
           surname: names.a.informantSurname
         },
         'informant.dob': '2006-05-30',
-        'informant.nid': a.informantNid,
-        'informant.phoneNo': a.phone,
-        'informant.email': a.email
+        'informant.phoneNo': phone(),
+        'informant.email': email('td01')
       }
     }),
-    ActionType.REGISTER
+    ActionType.DECLARE
   )
 
-  // TD-02 (B): 1 edit from A in every child, father and informant name.
-  // The mother is unrelated, so that dedup
-  // does not flag the record (every dedup rule needs a similar mother).
   const tdB = await createBirth(
-    agentToken,
+    token,
     await getBirthDeclaration({
-      token: agentToken,
+      token,
       informantRelation: 'BROTHER',
       partialDeclaration: {
+        ...fatherDetails,
         'child.name': {
           firstname: names.b.childFirst,
           surname: names.b.childSurname
         },
-        'mother.name': { firstname: word(6), surname: word(9) },
+        'mother.name': {
+          firstname: names.b.motherFirst,
+          surname: names.b.motherSurname
+        },
         'mother.dob': '1988-01-09',
-        'father.detailsNotAvailable': false,
         'father.name': {
           firstname: names.b.fatherFirst,
           surname: names.b.fatherSurname
         },
         'father.dob': '1987-05-03',
-        'father.nationality': 'FAR',
-        'father.idType': 'NATIONAL_ID',
         'father.nid': nid(),
-        'father.addressSameAs': 'YES',
         'informant.name': {
           firstname: names.b.informantFirst,
           surname: names.b.informantSurname
@@ -390,11 +470,54 @@ export async function createQuickSearchRecords() {
     ActionType.DECLARE
   )
 
-  // TD-03 (C): short names for the 1-2 and 3-5 letter tiers
-  const tdC = await createBirth(
-    agentToken,
+  const tdD = await createBirth(
+    token,
     await getBirthDeclaration({
-      token: agentToken,
+      token,
+      partialDeclaration: {
+        'child.name': {
+          firstname: names.d.childFirst,
+          surname: names.d.childSurname
+        },
+        'mother.name': {
+          firstname: names.d.motherFirst,
+          surname: names.d.motherSurname
+        },
+        'informant.phoneNo': phone(),
+        'informant.email': email('td04')
+      }
+    }),
+    ActionType.DECLARE
+  )
+
+  return {
+    names,
+    a: {
+      eventType: 'birth',
+      title: fullName(names.a.childFirst, names.a.childSurname),
+      trackingId: tdA.trackingId as string
+    },
+    b: {
+      eventType: 'birth',
+      title: fullName(names.b.childFirst, names.b.childSurname),
+      trackingId: tdB.trackingId as string
+    },
+    d: {
+      eventType: 'birth',
+      title: fullName(names.d.childFirst, names.d.childSurname),
+      trackingId: tdD.trackingId as string
+    }
+  }
+}
+
+/** The short-name test record (TD-03), declared by f.katongo. */
+export async function createShortNameRecord() {
+  const names = buildShortNameSet()
+  const token = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
+  const record = await createBirth(
+    token,
+    await getBirthDeclaration({
+      token,
       partialDeclaration: {
         'child.name': {
           firstname: names.c.childFirst,
@@ -410,33 +533,61 @@ export async function createQuickSearchRecords() {
     }),
     ActionType.DECLARE
   )
+  return {
+    names,
+    c: {
+      eventType: 'birth',
+      title: fullName(names.c.childFirst, names.c.childSurname),
+      trackingId: record.trackingId as string
+    }
+  }
+}
 
-  // TD-04 (D): 3 edits from A in each child name. Must not match.
-  const tdD = await createBirth(
-    agentToken,
+/**
+ * The records for the extra checks (not in TestRail C2491), declared by
+ * f.katongo: a birth with a mother, father and informant NID and an email,
+ * and a death (TD-05) whose surname is used in a full-name search.
+ */
+export async function createExtraCheckRecords() {
+  const token = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
+  const child = { firstname: word(9), surname: word(10) }
+  const values = {
+    motherNid: nid(),
+    fatherNid: nid(),
+    informantNid: nid(),
+    email: email('extra')
+  }
+  const birth = await createBirth(
+    token,
     await getBirthDeclaration({
-      token: agentToken,
+      token,
+      informantRelation: 'BROTHER',
       partialDeclaration: {
-        'child.name': {
-          firstname: names.d.childFirst,
-          surname: names.d.childSurname
-        },
-        'mother.name': { firstname: word(8), surname: word(8) },
+        'child.name': child,
+        'mother.nid': values.motherNid,
+        'father.detailsNotAvailable': false,
+        'father.name': { firstname: word(6), surname: word(9) },
+        'father.dob': '1993-07-22',
+        'father.nationality': 'FAR',
+        'father.idType': 'NATIONAL_ID',
+        'father.nid': values.fatherNid,
+        'father.addressSameAs': 'YES',
+        'informant.name': { firstname: word(6), surname: word(8) },
+        'informant.dob': '2006-05-30',
+        'informant.nid': values.informantNid,
         'informant.phoneNo': phone(),
-        'informant.email': email('td04')
+        'informant.email': values.email
       }
     }),
     ActionType.DECLARE
   )
 
-  // TD-05 (E): death record in Klow
   const deceased = { firstname: word(7), surname: word(9) }
-  const deceasedNid = nid()
-  const tdE = await createDeath(
-    agentToken,
+  const death = await createDeath(
+    token,
     {
       'deceased.name': deceased,
-      'deceased.nid': deceasedNid,
+      'deceased.nid': nid(),
       'spouse.name': { firstname: word(7), surname: deceased.surname },
       'informant.phoneNo': phone(),
       'informant.email': email('td05')
@@ -445,35 +596,18 @@ export async function createQuickSearchRecords() {
   )
 
   return {
-    names,
-    a: {
-      ...a,
+    birth: {
+      ...values,
+      childFirst: child.firstname,
       eventType: 'birth',
-      title: fullName(names.a.childFirst, names.a.childSurname),
-      trackingId: tdA.trackingId as string,
-      registrationNumber: tdA.registrationNumber
+      title: fullName(child.firstname, child.surname),
+      trackingId: birth.trackingId as string
     },
-    b: {
-      eventType: 'birth',
-      title: fullName(names.b.childFirst, names.b.childSurname),
-      trackingId: tdB.trackingId as string
-    },
-    c: {
-      eventType: 'birth',
-      title: fullName(names.c.childFirst, names.c.childSurname),
-      trackingId: tdC.trackingId as string
-    },
-    d: {
-      eventType: 'birth',
-      title: fullName(names.d.childFirst, names.d.childSurname),
-      trackingId: tdD.trackingId as string
-    },
-    e: {
+    death: {
       eventType: 'death',
-      title: fullName(deceased.firstname, deceased.surname),
       surname: deceased.surname,
-      nid: deceasedNid,
-      trackingId: tdE.trackingId as string
+      title: fullName(deceased.firstname, deceased.surname),
+      trackingId: death.trackingId as string
     }
   }
 }
@@ -494,15 +628,14 @@ export async function waitUntilSearchable(
     await expect
       .poll(
         async () => {
-          const result = await client.event.search.query({
-            query: {
-              type: 'and',
-              clauses: [
-                { eventType, trackingId: { type: 'exact', term: trackingId } }
-              ]
-            }
-          } as never)
-          return (result as { total: number }).total
+          const query: QueryType = {
+            type: 'and',
+            clauses: [
+              { eventType, trackingId: { type: 'exact', term: trackingId } }
+            ]
+          }
+          const result = await client.event.search.query({ query })
+          return result.total
         },
         {
           message: `Search does not find ${eventType} ${trackingId}`,
@@ -510,107 +643,5 @@ export async function waitUntilSearchable(
         }
       )
       .toBeGreaterThan(0)
-  }
-}
-
-/** TD-06 (F): registered birth in Oya (Pualula), by n.siame. */
-export async function createOtherJurisdictionRecord() {
-  const token = await getToken(CREDENTIALS.REGISTRAR_PUALULA)
-  const oya = await getVillageId(token, 'Oya')
-  const child = { firstname: word(8), surname: word(8) }
-  const motherNid = nid()
-  const record = await createBirth(
-    token,
-    await getBirthDeclaration({
-      token,
-      partialDeclaration: {
-        ...privateHomeIn(oya),
-        'child.name': child,
-        'mother.nid': motherNid,
-        'mother.address': {
-          country: 'FAR',
-          addressType: AddressType.DOMESTIC,
-          administrativeArea: oya
-        },
-        'informant.phoneNo': phone(),
-        'informant.email': email('td06')
-      }
-    }),
-    ActionType.REGISTER
-  )
-  return {
-    title: fullName(child.firstname, child.surname),
-    motherNid,
-    trackingId: record.trackingId as string
-  }
-}
-
-/**
- * TD-07 (G): draft by f.katongo (not sent). The existing helper uses a
- * random faker name, and returns it as the record title.
- */
-export async function createDraftRecord() {
-  const token = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
-  return { title: await createBirthDraftViaApi(token) }
-}
-
-/** TD-08 (H): registered by k.mweene, then sealed by c.lungu. */
-export async function createSealedRecord() {
-  const registrarToken = await getToken(CREDENTIALS.REGISTRAR)
-  const child = { firstname: word(8), surname: word(10) }
-  const record = await createBirth(
-    registrarToken,
-    await getBirthDeclaration({
-      token: registrarToken,
-      partialDeclaration: {
-        'child.name': child,
-        'informant.phoneNo': phone(),
-        'informant.email': email('td08')
-      }
-    }),
-    ActionType.REGISTER
-  )
-
-  const generalToken = await getToken(CREDENTIALS.REGISTRAR_GENERAL)
-  await customActionViaApi({
-    token: generalToken,
-    eventId: record.eventId,
-    customActionType: 'SEAL',
-    annotation: {
-      reason: 'COURT_ORDER',
-      courtOrderReference: `CO-${faker.string.numeric(6)}`,
-      courtOrderCopy: await uploadFile(getSignatureFile(), generalToken)
-    }
-  })
-
-  return {
-    title: fullName(child.firstname, child.surname),
-    trackingId: record.trackingId as string
-  }
-}
-
-/** TD-09 (I): declared by f.katongo, then archived by f.katongo. */
-export async function createArchivedRecord() {
-  const token = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
-  const child = { firstname: word(8), surname: word(10) }
-  const motherNid = nid()
-  const record = await createBirth(
-    token,
-    await getBirthDeclaration({
-      token,
-      partialDeclaration: {
-        'child.name': child,
-        'mother.nid': motherNid,
-        'informant.phoneNo': phone(),
-        'informant.email': email('td09')
-      }
-    }),
-    ActionType.DECLARE
-  )
-  await archiveViaApi(token, record.eventId)
-  return {
-    title: fullName(child.firstname, child.surname),
-    motherNid,
-    trackingId: record.trackingId as string
   }
 }
