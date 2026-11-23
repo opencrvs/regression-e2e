@@ -4,6 +4,13 @@ on:
   schedule:
     # Every Monday at 01:00 UTC, when nobody uses the environment.
     - cron: '0 1 * * 1'
+  push:
+    branches:
+      - develop
+    # A change to the documentation does not change the tests.
+    paths-ignore:
+      - '**.md'
+      - LICENSE
   workflow_dispatch:
     inputs:
       environment:
@@ -104,7 +111,7 @@ jobs:
       - name: Make the message
         env:
           RESULT: ${{ needs.test.result }}
-          TRIGGER: ${{ github.event_name == 'schedule' && 'weekly run' || format('run by {0}', github.actor) }}
+          TRIGGER: ${{ github.event_name == 'schedule' && 'weekly run' || github.event_name == 'push' && format('merge by {0}', github.actor) || format('run by {0}', github.actor) }}
           DOMAIN: ${{ inputs.environment || 'qa' }}.opencrvs.dev
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RESULTS: ${{ needs.test.outputs.results }}
