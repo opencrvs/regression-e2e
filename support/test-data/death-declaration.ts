@@ -135,6 +135,7 @@ export type Declaration = Awaited<ReturnType<typeof getDeclaration>>
 export interface CreateDeclarationResponse {
   eventId: string
   declaration: Declaration
+  trackingId?: string
 }
 
 export async function createDeclaration(
@@ -166,7 +167,7 @@ export async function createDeclaration(
 
   const eventId = createResponse.id as string
 
-  const filename = await uploadFile(getSignatureFile(), token)
+  const filename = await uploadFile(getSignatureFile(), token, eventId)
 
   const annotation = {
     'review.comment': 'My comment',
@@ -214,7 +215,11 @@ export async function createDeclaration(
       throw new Error('Declaration info not found in action')
     }
 
-    return { eventId, declaration: declareAction?.declaration as Declaration }
+    return {
+      eventId,
+      declaration: declareAction?.declaration as Declaration,
+      trackingId: declareRes.trackingId
+    }
   }
 
   const registerRes = await client.event.actions.register.request.mutate({
@@ -229,5 +234,9 @@ export async function createDeclaration(
     (action: ActionDocument) => action.type === 'REGISTER'
   )
 
-  return { eventId, declaration: registerAction?.declaration as Declaration }
+  return {
+    eventId,
+    declaration: registerAction?.declaration as Declaration,
+    trackingId: registerRes.trackingId
+  }
 }
