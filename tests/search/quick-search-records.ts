@@ -26,10 +26,8 @@ import { createDeclaration as createDeath } from '@support/test-data/death-decla
  * - ID test: a registered record (createIdRecord).
  * - Name test: TD-01, TD-02 and TD-04 (createNameRecords).
  * - Short-name test: TD-03 (createShortNameRecord).
- * - Extra checks: a birth record and a death record, TD-05
- *   (createExtraCheckRecords).
- * The TD numbers are the records in the test data workbook
- * test-data-search-quick-search-2026-11-17.xlsx.
+ * - Full-name test: a birth record and a death record, TD-05
+ *   (createFullNameRecords).
  *
  * The names are random, so that parallel runs do not collide. Each run
  * builds the near-miss names from the base names, and checks the edit
@@ -332,6 +330,64 @@ const email = (label: string) =>
 const fullName = (first: string, surname: string) => `${first} ${surname}`
 
 /**
+ * Returns the tracking ID of a new record. Throws an error in the setup if
+ * the API did not return one, so that the test does not search for a
+ * missing ID.
+ */
+function requireTrackingId(record: { trackingId?: string }) {
+  if (!record.trackingId) {
+    throw new Error('Setup: the API did not return a tracking ID')
+  }
+  return record.trackingId
+}
+
+/**
+ * Waits until search shows the registration number of the record. The
+ * register response does not always contain the number, for example when
+ * the registration is still in progress.
+ */
+async function waitForRegistrationNumber(trackingId: string) {
+  const token = await getToken(CREDENTIALS.REGISTRAR)
+  const client = createClient(GATEWAY_HOST + '/events', `Bearer ${token}`)
+  let registrationNumber: string | undefined
+  await expect
+    .poll(
+      async () => {
+        const query: QueryType = {
+          type: 'and',
+          clauses: [
+            {
+              eventType: 'birth',
+              trackingId: { type: 'exact', term: trackingId }
+            }
+          ]
+        }
+        const { results } = await client.event.search.query({ query })
+        registrationNumber =
+          results[0]?.legalStatuses.REGISTERED?.registrationNumber
+        return registrationNumber
+      },
+      {
+        message: `Setup: record ${trackingId} has no registration number`,
+        timeout: 60_000
+      }
+    )
+    .toBeTruthy()
+  return registrationNumber as string
+}
+
+/** The father of a birth record, with a name and an NID. */
+const fatherWithNid = (fatherNid: string) => ({
+  'father.detailsNotAvailable': false,
+  'father.name': { firstname: word(6), surname: word(9) },
+  'father.dob': '1993-07-22',
+  'father.nationality': 'FAR',
+  'father.idType': 'NATIONAL_ID',
+  'father.nid': fatherNid,
+  'father.addressSameAs': 'YES'
+})
+
+/**
  * Makes an invalid tracking ID or registration number: the last 3
  * characters become other digits. Quick search also searches the word as a
  * fuzzy name (up to 2 edits), and names have only letters, so 3 digits keep
@@ -357,37 +413,52 @@ export function changeLastCharacter(value: string) {
 }
 
 /**
- * The ID test record, registered by k.mweene: it has a tracking ID, a
- * registration number, a mother NID, an informant phone and an email.
+ * The ID test record, registered by the Local Registrar. It has a tracking
+ * ID, a registration number, a mother, father and informant NID, an
+ * informant phone and an email. The informant is a brother, so the
+ * informant NID is a separate field.
  */
 export async function createIdRecord() {
   const token = await getToken(CREDENTIALS.REGISTRAR)
   const child = { firstname: word(8), surname: word(10) }
-  const values = { motherNid: nid(), phone: phone(), email: email('idrecord') }
+  const values = {
+    motherNid: nid(),
+    fatherNid: nid(),
+    informantNid: nid(),
+    phone: phone(),
+    email: email('idrecord')
+  }
   const record = await createBirth(
     token,
     await getBirthDeclaration({
       token,
+      informantRelation: 'BROTHER',
       partialDeclaration: {
         'child.name': child,
         'mother.nid': values.motherNid,
+        ...fatherWithNid(values.fatherNid),
+        'informant.name': { firstname: word(6), surname: word(8) },
+        'informant.dob': '2006-05-30',
+        'informant.nid': values.informantNid,
         'informant.phoneNo': values.phone,
         'informant.email': values.email
       }
     }),
     ActionType.REGISTER
   )
+  const trackingId = requireTrackingId(record)
   return {
     ...values,
     eventType: 'birth',
     title: fullName(child.firstname, child.surname),
-    trackingId: record.trackingId as string,
-    registrationNumber: record.registrationNumber
+    trackingId,
+    registrationNumber:
+      record.registrationNumber ?? (await waitForRegistrationNumber(trackingId))
   }
 }
 
 /**
- * The name test records, declared by f.katongo:
+ * The name test records, declared by the Registration Officer:
  * - TD-01 (A): every name field has its own name.
  * - TD-02 (B): 1 edit from A in every child, father and informant name,
  *   and an unrelated mother.
@@ -495,22 +566,22 @@ export async function createNameRecords() {
     a: {
       eventType: 'birth',
       title: fullName(names.a.childFirst, names.a.childSurname),
-      trackingId: tdA.trackingId as string
+      trackingId: requireTrackingId(tdA)
     },
     b: {
       eventType: 'birth',
       title: fullName(names.b.childFirst, names.b.childSurname),
-      trackingId: tdB.trackingId as string
+      trackingId: requireTrackingId(tdB)
     },
     d: {
       eventType: 'birth',
       title: fullName(names.d.childFirst, names.d.childSurname),
-      trackingId: tdD.trackingId as string
+      trackingId: requireTrackingId(tdD)
     }
   }
 }
 
-/** The short-name test record (TD-03), declared by f.katongo. */
+/** The short-name test record (TD-03), declared by the Registration Officer. */
 export async function createShortNameRecord() {
   const names = buildShortNameSet()
   const token = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
@@ -538,45 +609,27 @@ export async function createShortNameRecord() {
     c: {
       eventType: 'birth',
       title: fullName(names.c.childFirst, names.c.childSurname),
-      trackingId: record.trackingId as string
+      trackingId: requireTrackingId(record)
     }
   }
 }
 
 /**
- * The records for the extra checks (not in TestRail C2491), declared by
- * f.katongo: a birth with a mother, father and informant NID and an email,
- * and a death (TD-05) whose surname is used in a full-name search.
+ * The full-name test records (TestRail C2491 step 9), declared by the
+ * Registration Officer: a birth, and a death (TD-05). The search uses the
+ * child first name of the birth and the deceased surname of the death.
  */
-export async function createExtraCheckRecords() {
+export async function createFullNameRecords() {
   const token = await getToken(CREDENTIALS.REGISTRATION_OFFICER)
   const child = { firstname: word(9), surname: word(10) }
-  const values = {
-    motherNid: nid(),
-    fatherNid: nid(),
-    informantNid: nid(),
-    email: email('extra')
-  }
   const birth = await createBirth(
     token,
     await getBirthDeclaration({
       token,
-      informantRelation: 'BROTHER',
       partialDeclaration: {
         'child.name': child,
-        'mother.nid': values.motherNid,
-        'father.detailsNotAvailable': false,
-        'father.name': { firstname: word(6), surname: word(9) },
-        'father.dob': '1993-07-22',
-        'father.nationality': 'FAR',
-        'father.idType': 'NATIONAL_ID',
-        'father.nid': values.fatherNid,
-        'father.addressSameAs': 'YES',
-        'informant.name': { firstname: word(6), surname: word(8) },
-        'informant.dob': '2006-05-30',
-        'informant.nid': values.informantNid,
         'informant.phoneNo': phone(),
-        'informant.email': values.email
+        'informant.email': email('fullname')
       }
     }),
     ActionType.DECLARE
@@ -597,17 +650,16 @@ export async function createExtraCheckRecords() {
 
   return {
     birth: {
-      ...values,
       childFirst: child.firstname,
       eventType: 'birth',
       title: fullName(child.firstname, child.surname),
-      trackingId: birth.trackingId as string
+      trackingId: requireTrackingId(birth)
     },
     death: {
       eventType: 'death',
       surname: deceased.surname,
       title: fullName(deceased.firstname, deceased.surname),
-      trackingId: death.trackingId as string
+      trackingId: requireTrackingId(death)
     }
   }
 }

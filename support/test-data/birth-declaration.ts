@@ -262,7 +262,7 @@ export async function createDeclaration(
     }
   }
 
-  const filename = await uploadFile(getSignatureFile(), token)
+  const filename = await uploadFile(getSignatureFile(), token, eventId)
 
   const annotation = {
     'review.comment': 'My comment',
